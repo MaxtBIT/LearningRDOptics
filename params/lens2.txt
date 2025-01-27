@@ -1,0 +1,6 @@
+Guangke 110010
+type distance roc diameter material
+O 0.00        0.00             0.00    AIR
+S 0.00         29.9899     20.0    N-BK7
+S 5.90        -29.9899     20.0    AIR
+I 27.914     0.00             12.0    AIR
