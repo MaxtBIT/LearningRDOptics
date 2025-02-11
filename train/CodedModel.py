@@ -238,27 +238,19 @@ class CodedNet(nn.Module):
                 return measures, gts, self.psfs
 
         elif mode == 'real':
-            if training is False:
-                # Get measurement.
-                for i in range(self.psf_real.shape[0]):
-                    self.psf_list.append(self.psf_real[i,...].transpose(2, 0).transpose(2, 1))
-                    self.psf_list_detach.append(self.psf_real[i,...].transpose(2, 0).transpose(2, 1).detach())
-                psf_tmp_list = []
-                for i in range(90):
-                    psf = self.psf_list[self.psf_index[i]]
-                    psf = ttf.rotate(psf, self.angle_list[i])
-                    normalized_psf = psf / torch.sum(psf, dim=(1,2), keepdim=True)
-                    psf_tmp_list.append(normalized_psf.unsqueeze(0))
-                self.psfs_detach = torch.cat(psf_tmp_list, 0).detach()
+            # Get measurement.
+            for i in range(self.psf_real.shape[0]):
+                self.psf_list.append(self.psf_real[i,...].transpose(2, 0).transpose(2, 1))
+                self.psf_list_detach.append(self.psf_real[i,...].transpose(2, 0).transpose(2, 1).detach())
+            psf_tmp_list = []
+            for i in range(90):
+                psf = self.psf_list[self.psf_index[i]]
+                psf = ttf.rotate(psf, self.angle_list[i])
+                normalized_psf = psf / torch.sum(psf, dim=(1,2), keepdim=True)
+                psf_tmp_list.append(normalized_psf.unsqueeze(0))
+            self.psfs_detach = torch.cat(psf_tmp_list, 0).detach()
 
-                return x, x, self.psfs_detach
-
-            else:
-
-                measures = 1
-                gts = 1
-                
-                return measures, gts, self.psfs
+            return x, x, self.psfs_detach
         
         else:
             raise NotImplementedError
