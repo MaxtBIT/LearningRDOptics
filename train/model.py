@@ -10,9 +10,9 @@ class DROptics(nn.Module):
         self.codednet = codednet
         self.reconnet = reconnet
         
-    def forward(self, x, batch_idx, wls_id, training):
+    def forward(self, x, mode, training):
 
-        measure_pic, gts, psfs = self.codednet(x, batch_idx, wls_id, training)
+        measure_pic, gts, psfs = self.codednet(x, mode, training)
         Output_hsi = self.reconnet(measure_pic, psfs)
 
         return gts, Output_hsi
@@ -20,8 +20,8 @@ class DROptics(nn.Module):
 def prepare_model(opt):
 
     print("exp_name:    ", opt.exp_name)
-    if "A324" in opt.exp_name:
-        import train.A324 as ReconModel
+    if "FoVFormer" in opt.exp_name:
+        import train.ReconModel as ReconModel
     else:
         reconmodel = None
         raise Exception("model_not_find")

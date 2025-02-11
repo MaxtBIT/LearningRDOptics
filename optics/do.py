@@ -12,7 +12,6 @@ from .shapes import *
 
 class Surface(PrettyPrinter):
     def __init__(self, r, d, is_square=False, device=torch.device('cpu')):
-        # self.r = torch.Tensor(np.array(r))
         if torch.is_tensor(d):
             self.d = d
         else:
@@ -738,7 +737,6 @@ class Lensgroup(Endpoint):
 
         for i, view in enumerate(views):
             ray = self.sample_ray_2D(R, wavelength, view=view, M=M, entrance_pupil=entrance_pupil)
-            # ray.o = 0.0 *  ray.o
             ps, oss = self.trace_to_sensor_r(ray)
             ax, fig = self.plot_raytraces(oss, ax=ax, fig=fig, color=colors_list[i])
 
@@ -1294,7 +1292,6 @@ class Lensgroup(Endpoint):
     def _trace(self, ray, stop_ind=None, record=False):
         if stop_ind is None:
             stop_ind = len(self.surfaces)-1  # last index to stop
-        # AAA = ray.d[..., 2] > 0
         is_forward = (ray.d[..., 2] > 0).all()
 
         # TODO: Check ray origins to ensure valid ray intersections onto the surfaces
@@ -1315,10 +1312,7 @@ class Lensgroup(Endpoint):
 
         valid = torch.ones(dim, device=self.device).bool()
         for i in range(stop_ind+1):
-            # aaa = self.materials[i].ior(wavelength)
-            # bbb = self.materials[i+1].ior(wavelength)
-            # ccc = self.materials[i]
-            # ddd = self.materials[i+1]
+
             eta = self.materials[i].ior(wavelength) / self.materials[i+1].ior(wavelength)
 
             # ray intersecting surface

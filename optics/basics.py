@@ -3,7 +3,6 @@ from enum import Enum
 import torch
 import numpy as np
 
-
 class PrettyPrinter():
     def __str__(self):
         lines = [self.__class__.__name__ + ':']

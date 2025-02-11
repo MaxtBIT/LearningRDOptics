@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import segmentation_models_pytorch as smp
 import torch.nn.functional as F
 import numpy as np
 import spectral as spy
@@ -48,7 +47,6 @@ class Up(nn.Module):
     def __init__(self, in_channels, out_channels, bilinear=True):
         super().__init__()
 
-        # if bilinear, use the normal convolutions to reduce the number of channels
         if bilinear:
             self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
             self.conv = DoubleConv(in_channels, out_channels, in_channels // 2)
@@ -64,9 +62,7 @@ class Up(nn.Module):
 
         x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2,
                         diffY // 2, diffY - diffY // 2])
-        # if you have padding issues, see
-        # https://github.com/HaiyongJiang/U-Net-Pytorch-Unstructured-Buggy/commit/0e854509c2cea854e247a9c615f175f76fbb2e3a
-        # https://github.com/xiaopeng-liao/Pytorch-UNet/commit/8ebac70e633bac59fc22bb5195e513d5832fb3bd
+
         x = torch.cat([x2, x1], dim=1)
         return self.conv(x)
 
@@ -98,7 +94,6 @@ def _no_grad_trunc_normal_(tensor, mean, std, a, b):
 
 
 def trunc_normal_(tensor, mean=0., std=1., a=-2., b=2.):
-    # type: (Tensor, float, float, float, float) -> Tensor
     return _no_grad_trunc_normal_(tensor, mean, std, a, b)
 
 
@@ -119,7 +114,6 @@ class BatchNorm(nn.Module):
         self.norm = nn.BatchNorm2d(dim)
 
     def forward(self, x, *args, **kwargs):
-        # print(x.shape)
         x = x.permute(0, 3, 1, 2)
         x = self.norm(x)
         x = x.permute(0, 2, 3, 1)
@@ -153,24 +147,21 @@ class HS_MSA(nn.Module):
         self.to_k = nn.Linear(dim, inner_dim, bias=False)
         self.to_v = nn.Linear(dim, inner_dim, bias=False)
 
-        out_c = window_size[0] * window_size[1] * dim
-        self.to_out = nn.Linear(out_c, out_c)    # nn.Linear(inner_dim, dim)
+        self.to_out = nn.Linear(inner_dim, dim)
 
-        h, w = 576 // self.heads, 640 // self.heads  # head表示下降的头数
+        h, w = 576 // self.heads, 640 // self.heads 
         self.global_atten = Attention(dim,inner_dim, num_patches=[h//window_size[0],w//window_size[1]], num_heads=heads,)
 
         self.prompt_conv1 = DoubleConv(32, 16)
         self.prompt_conv2 = DoubleConv(64, 32)
         self.prompt_conv3 = DoubleConv(128, 64)
 
-    # def forward(self, x):
     def forward(self, x, pmt, dim):
         """
         x: [b,h,w,c]
         return out: [b,h,w,c]
         """
         b, h, w, c = x.shape
-        # print("x_shape",x.shape)
         w_size = self.window_size
         h_num,w_num = (h//w_size[0]) , (w//w_size[1])
         hw_num = h_num * w_num
@@ -196,9 +187,9 @@ class HS_MSA(nn.Module):
                                                 b0=w_size[0], b1=w_size[1]), (q, k, v))
 
         out = self.global_atten(q, k, v)
-        out = self.to_out(out)
         out = rearrange(out, 'b (h w) (c b0 b1) -> b (h b0) (w b1) c', b0=w_size[0], b1=w_size[1], h=h_num,
                               w=w_num)
+        out = self.to_out(out)
 
         return out
 
@@ -233,17 +224,18 @@ class Attention(nn.Module):
         q *= self.scale
         sim = einsum('b h i d, b h j d -> b h i j', q, k)
         sim = sim + self.positional_encoding
-        attn = sim.softmax(dim=-1)
         
-        # attention mask
-        if attn.shape[2] == 90:
-            attn = attn * self.mask90
-        elif attn.shape[2] == 360:
-            attn = attn * self.mask360
-        elif attn.shape[2] == 1440:
-            attn = attn * self.mask1440
+        # FoV guidance
+        if sim.shape[2] == 90:
+            sim = sim * self.mask90
+        elif sim.shape[2] == 360:
+            sim = sim * self.mask360
+        elif sim.shape[2] == 1440:
+            sim = sim * self.mask1440
         else:
             raise NotImplementedError
+
+        attn = sim.softmax(dim=-1)
 
         out = einsum('b h i j, b h j d -> b h i d', attn, v)
         out = rearrange(out, 'b h n d -> b  n (h d)', h=self.num_heads)
@@ -335,10 +327,10 @@ class DRT(nn.Module):
         # Output projection
         self.mapping = nn.Conv2d(self.dim, out_dim, 3, 1, 1, bias=False)
 
-        # activation function
+        # Activation function
         self.apply(self._init_weights)
 
-        # psf features
+        # PSF features
         self.promptin = (DoubleConv(7, 16))
         self.promptdown1 = (Down(16, 32))
         self.promptdown2 = (Down(32, 64))
@@ -357,7 +349,6 @@ class DRT(nn.Module):
         x: [b,c,h,w]
         return out:[b,c,h,w]
         """
-        # print(x.shape)
         b, c, h_inp, w_inp = x.shape
         hb, wb = 16, 16
         pad_h = (hb - h_inp % hb) % hb
@@ -367,7 +358,7 @@ class DRT(nn.Module):
         # Embedding
         fea = self.embedding(x)
 
-        #prompt
+        # PSF Prompt
         pad_size = 10
         psfs_pad = F.pad(psfs, pad=(pad_size, pad_size, pad_size, pad_size, 0, 0), mode='constant')
         pmt_x1 = self.promptin(psfs_pad)
@@ -397,12 +388,12 @@ class DRT(nn.Module):
         # Decoder
         for i, (FeaUpSample, Fution, HSAB) in enumerate(self.decoder_layers):
             fea = FeaUpSample(fea)
-            fea = Fution(torch.cat([fea, fea_encoder[self.scales-2-i]], dim=1))   # [1, 32, 288, 320]    [1, 16, 576, 640]
+            fea = Fution(torch.cat([fea, fea_encoder[self.scales-2-i]], dim=1))
             fea = HSAB(fea, pmt_x2_input, 0)  
 
         # Mapping
         out = self.mapping(fea) + x
         return out[:, :, :h_inp, :w_inp]
-
+    
 def ReconModel():
-    return DRT()
+    return DRT() 

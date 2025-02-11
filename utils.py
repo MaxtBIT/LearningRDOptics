@@ -8,17 +8,18 @@ import torch.nn.functional as F
 from os import path as path
 import spectral as spy
 import cv2
+import lpips
 
 # function for parsing input arguments
 def parse_arg():
     parser = argparse.ArgumentParser(description='train.py')
-    parser.add_argument('-mode', type=str, default="baseline", help="baseline: random mask, optim: learnable mask")
-    parser.add_argument('-exp_name', type=str, default="A324", help="exp_name")
+    parser.add_argument('-mode', type=str, default="real", help="simu: train DOE, real: test real capture")
+    parser.add_argument('-exp_name', type=str, default="FoVFormer", help="exp_name")
     # training settings
     parser.add_argument('-gpuid', type=int, default=0)
-    parser.add_argument('-batch_size', type=int, default=1)    # 16
+    parser.add_argument('-batch_size', type=int, default=1)
     parser.add_argument('-epochs', type=int, default=60)
-    parser.add_argument('-batch_num', type=int, default=800)  # the number of batches for each .h5 file 50
+    parser.add_argument('-batch_num', type=int, default=800)  # the number of batches for each .h5 file
     parser.add_argument('-report_every', type=int, default=200)   # report log after x batches 50
     parser.add_argument('-test_every', type=int, default=800)  # evaluate model after x batches 50
     parser.add_argument('-train_len', type=int, default=5) # get the number of .h5 files
@@ -27,8 +28,8 @@ def parse_arg():
     parser.add_argument('-save_dir', type=str, default='./model/')
     parser.add_argument('-save_log', type=str, default='./data_log/')
     parser.add_argument('-save_loss', type=str, default='./graph_log/')
-    parser.add_argument('-pretrained_path', type=str, default='./model/div2k_retrain/trained_modelA324.pth') # div2k_retrain 4lvl_0427_loadpretrain set the path of the pre-trained model ../root/autodl-tmp/pt_model/trained_modelA324.pth
-    parser.add_argument('-fixed_params_path', type=str, default='./model/div2k_retrain/trained_modelA324_nonl.pth') 
+    parser.add_argument('-pretrained_path', type=str, default='./model/real_release/trained_modelFoVFormer.pth')
+    parser.add_argument('-fixed_params_path', type=str, default='./model/real_release/trained_modelFoVFormer_nonl.pth') 
     parser.add_argument('-trainset_path', type=str, default='../root/autodl-tmp/data/') # set the path of the trainset
     parser.add_argument('-testset_path', type=str, default='../root/autodl-tmp/data/') # set the path of the testset
     # model settings
@@ -37,15 +38,15 @@ def parse_arg():
     # optimizer settings
     parser.add_argument('-optim_type', type=str, default='adam', help="adam or sgd")
     parser.add_argument('-doe_grad', type=bool, default=True)
-    parser.add_argument('-lr_doe', type=float, default=0.0000000001, help="0.0000000003")  # 0.00000001 larger 0.00000000001 smaller  0.000000001 / 0.0000000005 / 0.0000000002 work
-    parser.add_argument('-lr_unet', type=float, default=0.0001, help="adam:0.0001, sgd: 0.05")    #0.00001 0.00005 work
+    parser.add_argument('-lr_doe', type=float, default=0.0000000001, help="0000000001")
+    parser.add_argument('-lr_unet', type=float, default=0.0001, help="adam:0.0001, sgd: 0.05")
     parser.add_argument('-weight_decay', type=float, default=0)
     parser.add_argument('-momentum', type=float, default=0.9, help="sgd: 0.9")
     # reduce the learning rate after each milestone
     parser.add_argument('-milestones', type=list, default=[20,40])
     # how much to reduce the learning rate
     parser.add_argument('-gamma', type=float, default=0.1)
-    parser.add_argument('-seed', type=int, default=2024)   # 1993 2024 34.3 40epo  worse: 1 0 4202 2025 1234 888 2019
+    parser.add_argument('-seed', type=int, default=2024)
 
     opt = parser.parse_args()
     return opt
@@ -58,8 +59,6 @@ def get_save_dir(opt, str_type=None):
 
     root = opt.save_dir
     save_name = path.join(root, opt.save_name + opt.exp_name) 
-    # save_name += '_'
-    # save_name += time.asctime(time.localtime(time.time()))
     save_name += '.pth'
 
     save_nonl_name = path.join(root, opt.save_name + opt.exp_name + '_nonl') 
@@ -154,22 +153,48 @@ def ssim(img1, img2):
                                                             (sigma1_sq + sigma2_sq + C2))
     return ssim_map.mean()
 
-# calculate the spectral angle mapping (SAM)
-def Cal_SAM(im_true, im_test):
+def Cal_LPIPS(img1, img2, use_gpu=True):
+    """
+    Calculate LPIPS similarity between two RGB images.
+    
+    Parameters:
+    - image1_path (str): Path to the first image.
+    - image2_path (str): Path to the second image.
+    - use_gpu (bool): Whether to use GPU for computation (default: True).
+    
+    Returns:
+    - lpips_score (float): The LPIPS similarity score between the two images.
+    """
+    # Load pre-trained LPIPS model
+    lpips_model = lpips.LPIPS(net='alex')  # Use AlexNet backbone by default
+    
+    # Check for GPU availability
+    if use_gpu and torch.cuda.is_available():
+        lpips_model = lpips_model.cuda()
+    
+    # Resize images to match dimensions
+    if img1.size != img2.size:
+        raise ValueError("Input images must have the same dimensions. Please resize them to match.")
 
-    a = sum(im_true * im_test, 2) + FLT_MIN
-    b = pow(sum(im_true * im_true, 2) + FLT_MIN, 1/2)
-    c = pow(sum(im_test * im_test, 2) + FLT_MIN, 1/2)
-    d = np.arccos(a/(b * c))
-
-    return np.mean(d)
+    # Convert images to tensors (shape: [1, 3, H, W])
+    img1_tensor = torch.tensor(np.array(img1)).permute(2, 0, 1).unsqueeze(0).float()
+    img2_tensor = torch.tensor(np.array(img2)).permute(2, 0, 1).unsqueeze(0).float()
+    
+    # Move tensors to GPU if available
+    if use_gpu and torch.cuda.is_available():
+        img1_tensor = img1_tensor.cuda()
+        img2_tensor = img2_tensor.cuda()
+    
+    # Calculate LPIPS score
+    lpips_score = lpips_model(img1_tensor, img2_tensor)
+    
+    # Return the LPIPS score as a scalar
+    return lpips_score.item()
 
 def get_intensities(input_field):
     return torch.square(torch.abs(input_field))
 
 def crop_psf(psf):
-    # max_y = torch.max(psf[:, 22:66, 22:66], 1)[1][:, 21, :] + 22    # max_y = torch.max(psf, 1)[1][:, 21, :]
-    # cropped_psf = psf[:, (max_y - 22):(max_y + 22), 22:66, :]     # cropped_psf = psf[:, (max_y - 11):(max_y + 11), 11:33, :]
 
     cropped_psf = psf[:, 22:66, 22:66, :]
 
